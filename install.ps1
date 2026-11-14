@@ -38,9 +38,12 @@ $ZipUrl     = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Branc
 $FontExts   = @('.ttf', '.otf', '.ttc')
 $FontsDir   = Join-Path $env:WINDIR 'Fonts'
 $FontRegKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
-$ScriptVersion = '1.2'
+$ScriptVersion = '1.4'
 $script:TempRoot = $null
 $script:Busy     = $false
+$script:CurFont  = $null
+$previewCache    = @{}
+$script:SampleText = @('AaBbCcDdEe', 'FfGgHhIiJj', 'KkLlMmNnOo', 'PpQqRrSsTt', 'UuVvWwXxYyZz', '0123456789', '!@#$%&*()') -join "`r`n"
 
 # ----------------------------------------------------------------------------
 # 1. PowerShell version check (Win 7 par PowerShell 2.0 hota hai, usay 5.1 chahiye)
@@ -208,6 +211,53 @@ function Set-NodeCounts {
     return $c
 }
 
+function Get-PreviewCollection {
+    # Font file ko repo se seedha load karta hai (install kiye bina) preview ke liye
+    param([int]$Index)
+    if ($previewCache.ContainsKey($Index)) { return $previewCache[$Index] }
+
+    $pfc = $null
+    try {
+        $pfc = New-Object System.Drawing.Text.PrivateFontCollection
+        $pfc.AddFontFile($fonts[$Index].Path)
+        if ($pfc.Families.Count -eq 0) { $pfc.Dispose(); $pfc = $null }
+    }
+    catch {
+        if ($pfc) { $pfc.Dispose() }
+        $pfc = $null
+    }
+    $previewCache[$Index] = $pfc
+    return $pfc
+}
+
+function Show-Preview {
+    param($Node)
+    if ($null -eq $Node) { return }
+
+    if ($Node.Tag -is [int]) {
+        $prevName.Text = $fonts[$Node.Tag].Name
+        $pfc = Get-PreviewCollection -Index $Node.Tag
+
+        if ($null -eq $pfc) {
+            $prevSample.Font = $defaultPreviewFont
+            if ($script:CurFont) { $script:CurFont.Dispose(); $script:CurFont = $null }
+            $prevSample.Text = 'Is font ka preview nahi ban saka. Install ke baad Windows mein dekh sakte hain.'
+            return
+        }
+
+        $newFont = New-Object System.Drawing.Font($pfc.Families[0], 18)
+        $prevSample.Font = $newFont
+        if ($script:CurFont) { $script:CurFont.Dispose() }
+        $script:CurFont = $newFont
+        $prevSample.Text = $script:SampleText
+    }
+    else {
+        $prevName.Text = $Node.Text
+        $prevSample.Font = $defaultPreviewFont
+        $prevSample.Text = 'Folder select kiya. Andar ka koi font select karein to preview yahan dikhega.'
+    }
+}
+
 function Get-CheckedLeafIndexes {
     param($Nodes)
     $out = @()
@@ -310,16 +360,31 @@ try {
 
         $tv = New-Object System.Windows.Forms.TreeView
         $tv.Location      = New-Object System.Drawing.Point(12, 38)
-        $tv.Size          = New-Object System.Drawing.Size(740, 330)
+        $tv.Size          = New-Object System.Drawing.Size(430, 330)
         $tv.CheckBoxes    = $true
         $tv.HideSelection = $false
         $tv.ShowLines     = $true
         $form.Controls.Add($tv)
 
+        $prevName = New-Object System.Windows.Forms.Label
+        $prevName.Location = New-Object System.Drawing.Point(455, 38)
+        $prevName.Size     = New-Object System.Drawing.Size(297, 22)
+        $prevName.Text     = 'Font select karein'
+        $form.Controls.Add($prevName)
+
+        $prevSample = New-Object System.Windows.Forms.Label
+        $prevSample.Location    = New-Object System.Drawing.Point(455, 64)
+        $prevSample.Size        = New-Object System.Drawing.Size(297, 304)
+        $prevSample.BorderStyle = 'FixedSingle'
+        $prevSample.BackColor   = [System.Drawing.Color]::White
+        $prevSample.Padding     = New-Object System.Windows.Forms.Padding(8)
+        $prevSample.Text        = ''
+        $form.Controls.Add($prevSample)
+        $defaultPreviewFont = $prevSample.Font
+
         Build-FontTree -TreeView $tv -Fonts $fonts
         Set-NodesChecked -Nodes $tv.Nodes -State $true
         foreach ($top in @($tv.Nodes)) { [void](Set-NodeCounts -Node $top) }
-        $tv.ExpandAll()
 
         $btnAll = New-Object System.Windows.Forms.Button
         $btnAll.Text     = 'Select all'
@@ -360,6 +425,11 @@ try {
             $script:Busy = $true
             Set-NodesChecked -Nodes $e.Node.Nodes -State $e.Node.Checked
             $script:Busy = $false
+        })
+
+        $tv.Add_AfterSelect({
+            param($sender, $e)
+            Show-Preview -Node $e.Node
         })
 
         $btnAll.Add_Click({
@@ -413,6 +483,12 @@ catch {
     Read-Host 'Enter dabayein to band karein' | Out-Null
 }
 finally {
+    # Preview ke font handles band karna (temp files delete karne se pehle)
+    if ($script:CurFont) { $script:CurFont.Dispose() }
+    foreach ($k in @($previewCache.Keys)) {
+        if ($previewCache[$k]) { $previewCache[$k].Dispose() }
+    }
+
     # Downloaded temp files saaf karna
     if ($script:TempRoot -and (Test-Path -LiteralPath $script:TempRoot)) {
         Remove-Item -LiteralPath $script:TempRoot -Recurse -Force -ErrorAction SilentlyContinue
