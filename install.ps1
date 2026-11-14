@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Repo ke andar ki tamam .ttf / .otf / .ttc fonts ko system-wide install karta hai
-    (C:\Windows\Fonts + registry). Default mode GUI hai: fonts ki list dikhti hai,
-    tick karke install karein. -NoGui se sab fonts console mein bina poochhe install hoti hain.
+    (C:\Windows\Fonts + registry). Default mode GUI hai: repo ka folder structure tree mein
+    dikhta hai, tick karke install karein. -NoGui se sab fonts console mein bina poochhe install hoti hain.
 
 .PARAMETER SourceDir
     Agar repo pehle se local folder mein extract ho chuka hai to uska path dein.
@@ -30,16 +30,17 @@ $ProgressPreference    = 'SilentlyContinue'
 # ----------------------------------------------------------------------------
 # Settings (agar repo ki default branch "master" hai to $Branch ko "master" karein)
 # ----------------------------------------------------------------------------
-$RepoOwner = 'ofclsuleman'
-$RepoName  = 'FINE-CNC-Fonts-Library'
-$Branch    = 'main'
-$ScriptUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/install.ps1"
-$ZipUrl    = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Branch.zip"
-$FontExts  = @('.ttf', '.otf', '.ttc')
-$FontsDir  = Join-Path $env:WINDIR 'Fonts'
+$RepoOwner  = 'ofclsuleman'
+$RepoName   = 'FINE-CNC-Fonts-Library'
+$Branch     = 'main'
+$ScriptUrl  = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/install.ps1"
+$ZipUrl     = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Branch.zip"
+$FontExts   = @('.ttf', '.otf', '.ttc')
+$FontsDir   = Join-Path $env:WINDIR 'Fonts'
 $FontRegKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+$ScriptVersion = '1.2'
 $script:TempRoot = $null
-$ScriptVersion = '1.1'
+$script:Busy     = $false
 
 # ----------------------------------------------------------------------------
 # 1. PowerShell version check (Win 7 par PowerShell 2.0 hota hai, usay 5.1 chahiye)
@@ -154,7 +155,71 @@ function Get-FontList {
 }
 
 # ----------------------------------------------------------------------------
-# 6. Ek font install karna
+# 6. GUI tree helpers: repo ka folder structure hi tree mein banana
+# ----------------------------------------------------------------------------
+function Build-FontTree {
+    param($TreeView, $Fonts)
+
+    $nodeMap = @{}
+    for ($i = 0; $i -lt $Fonts.Count; $i++) {
+        $parts  = $Fonts[$i].Label.Split('\')
+        $parent = $null
+        $key    = ''
+
+        # Folder nodes (har level ek node, sirf ek dafa banta hai)
+        for ($p = 0; $p -lt $parts.Length - 1; $p++) {
+            if ($key -eq '') { $key = $parts[$p] } else { $key = $key + '\' + $parts[$p] }
+
+            if ($nodeMap.ContainsKey($key)) {
+                $node = $nodeMap[$key]
+            }
+            else {
+                $node = New-Object System.Windows.Forms.TreeNode($parts[$p])
+                if ($null -eq $parent) { [void]$TreeView.Nodes.Add($node) }
+                else                   { [void]$parent.Nodes.Add($node) }
+                $nodeMap[$key] = $node
+            }
+            $parent = $node
+        }
+
+        # Font file node (Tag mein fonts array ka index hota hai)
+        $leaf = New-Object System.Windows.Forms.TreeNode($parts[$parts.Length - 1])
+        $leaf.Tag = $i
+        if ($null -eq $parent) { [void]$TreeView.Nodes.Add($leaf) }
+        else                   { [void]$parent.Nodes.Add($leaf) }
+    }
+}
+
+function Set-NodesChecked {
+    param($Nodes, [bool]$State)
+    foreach ($n in $Nodes) {
+        $n.Checked = $State
+        Set-NodesChecked -Nodes $n.Nodes -State $State
+    }
+}
+
+function Set-NodeCounts {
+    # Folder ke text ke saath andar kitne fonts hain, woh dikhata hai: "Montserrat (12)"
+    param($Node)
+    if ($Node.Tag -is [int]) { return 1 }
+    $c = 0
+    foreach ($ch in $Node.Nodes) { $c += (Set-NodeCounts -Node $ch) }
+    $Node.Text = $Node.Text + " ($c)"
+    return $c
+}
+
+function Get-CheckedLeafIndexes {
+    param($Nodes)
+    $out = @()
+    foreach ($n in $Nodes) {
+        if (($n.Tag -is [int]) -and $n.Checked) { $out += [int]$n.Tag }
+        $out += @(Get-CheckedLeafIndexes -Nodes $n.Nodes)
+    }
+    return $out
+}
+
+# ----------------------------------------------------------------------------
+# 7. Ek font install karna
 #    - Fonts folder mein copy (same file pehle se ho to skip)
 #    - Agar naam pe alag font pehle se ho to folder ka naam prefix laga kar copy
 #    - Registry entry (Windows ke liye zaroori)
@@ -198,7 +263,7 @@ function Install-OneFont {
 }
 
 # ----------------------------------------------------------------------------
-# 7. Main
+# 8. Main
 # ----------------------------------------------------------------------------
 try {
     $root  = Get-FontRoot
@@ -238,18 +303,23 @@ try {
         $form.MaximizeBox     = $false
 
         $lbl = New-Object System.Windows.Forms.Label
-        $lbl.Text     = "Install karne wale fonts tick karein, phir 'Install selected' dabayein.   Total fonts: $($fonts.Count)"
+        $lbl.Text     = "Folder ke andar font tick karein (folder tick karo to andar ke sab), phir 'Install selected' dabayein.   Total fonts: $($fonts.Count)"
         $lbl.Location = New-Object System.Drawing.Point(12, 12)
         $lbl.AutoSize = $true
         $form.Controls.Add($lbl)
 
-        $clb = New-Object System.Windows.Forms.CheckedListBox
-        $clb.Location        = New-Object System.Drawing.Point(12, 38)
-        $clb.Size            = New-Object System.Drawing.Size(740, 330)
-        $clb.CheckOnClick    = $true
-        $clb.HorizontalScrollbar = $true
-        foreach ($f in $fonts) { [void]$clb.Items.Add($f.Label, $true) }
-        $form.Controls.Add($clb)
+        $tv = New-Object System.Windows.Forms.TreeView
+        $tv.Location      = New-Object System.Drawing.Point(12, 38)
+        $tv.Size          = New-Object System.Drawing.Size(740, 330)
+        $tv.CheckBoxes    = $true
+        $tv.HideSelection = $false
+        $tv.ShowLines     = $true
+        $form.Controls.Add($tv)
+
+        Build-FontTree -TreeView $tv -Fonts $fonts
+        Set-NodesChecked -Nodes $tv.Nodes -State $true
+        foreach ($top in @($tv.Nodes)) { [void](Set-NodeCounts -Node $top) }
+        $tv.ExpandAll()
 
         $btnAll = New-Object System.Windows.Forms.Button
         $btnAll.Text     = 'Select all'
@@ -283,19 +353,32 @@ try {
         $log.Size       = New-Object System.Drawing.Size(740, 140)
         $form.Controls.Add($log)
 
+        # Folder tick/untick karne par uske andar ke sab items bhi wahi state lein
+        $tv.Add_AfterCheck({
+            param($sender, $e)
+            if ($script:Busy) { return }
+            $script:Busy = $true
+            Set-NodesChecked -Nodes $e.Node.Nodes -State $e.Node.Checked
+            $script:Busy = $false
+        })
+
         $btnAll.Add_Click({
-            for ($i = 0; $i -lt $clb.Items.Count; $i++) { $clb.SetItemChecked($i, $true) }
+            $script:Busy = $true
+            Set-NodesChecked -Nodes $tv.Nodes -State $true
+            $script:Busy = $false
         })
 
         $btnNone.Add_Click({
-            for ($i = 0; $i -lt $clb.Items.Count; $i++) { $clb.SetItemChecked($i, $false) }
+            $script:Busy = $true
+            Set-NodesChecked -Nodes $tv.Nodes -State $false
+            $script:Busy = $false
         })
 
         $btnInstall.Add_Click({
+            $idx = @(Get-CheckedLeafIndexes -Nodes $tv.Nodes)
             $picked = @()
-            for ($i = 0; $i -lt $clb.Items.Count; $i++) {
-                if ($clb.GetItemChecked($i)) { $picked += $fonts[$i] }
-            }
+            foreach ($i in $idx) { $picked += $fonts[$i] }
+
             if ($picked.Count -eq 0) {
                 [void][System.Windows.Forms.MessageBox]::Show('Koi font select nahi ki.', 'FINE CNC Fonts Installer')
                 return
