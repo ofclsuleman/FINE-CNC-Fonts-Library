@@ -39,6 +39,7 @@ $FontExts  = @('.ttf', '.otf', '.ttc')
 $FontsDir  = Join-Path $env:WINDIR 'Fonts'
 $FontRegKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
 $script:TempRoot = $null
+$ScriptVersion = '1.1'
 
 # ----------------------------------------------------------------------------
 # 1. PowerShell version check (Win 7 par PowerShell 2.0 hota hai, usay 5.1 chahiye)
@@ -230,7 +231,7 @@ try {
         [System.Windows.Forms.Application]::EnableVisualStyles()
 
         $form = New-Object System.Windows.Forms.Form
-        $form.Text            = 'FINE CNC Fonts Installer'
+        $form.Text            = "FINE CNC Fonts Installer v$ScriptVersion"
         $form.Size            = New-Object System.Drawing.Size(780, 640)
         $form.StartPosition   = 'CenterScreen'
         $form.FormBorderStyle = 'FixedDialog'
