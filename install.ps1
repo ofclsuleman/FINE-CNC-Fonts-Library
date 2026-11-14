@@ -149,7 +149,7 @@ function Get-FontList {
             Prefix = $safe
         }
     }
-    return ,$list
+    return $list
 }
 
 # ----------------------------------------------------------------------------
